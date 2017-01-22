@@ -27,10 +27,10 @@ class Redis(DependencyProvider):
             if not service_name:
                 raise Exception("`service_name` is required for "
                                 "redis-sentinel scheme")
-            master = conf.pop("master", True)
+            prefer_master = conf.pop("prefer_master", True)
             sentinels = conf.pop("sentinels")
             sentinel = Sentinel(sentinels, **conf)
-            if master:
+            if prefer_master:
                 self.client = sentinel.master_for(service_name)
             else:
                 self.client = sentinel.slave_for(service_name)
@@ -41,14 +41,17 @@ class Redis(DependencyProvider):
 
     def parse_uri(self, uri):
         """
-        >>> rd = Redis()
+        >>> rd = Redis('dev')
         >>> conf = rd.parse_uri('redis-sentinel://:pass@host1,host2:26379/0?'
-                                'service_name=dev&master=true&socket_timeout=3')
+        ...                     'service_name=dev&prefer_master=true&'
+        ...                     'socket_timeout=3')
         >>> conf == {
         ...     "scheme": "redis-sentinel",
         ...     "sentinels": [("host1", 26379), ("host2", 26379)],
         ...     "db": 0,
         ...     "password": "pass",
+        ...     "service_name": "dev",
+        ...     "prefer_master": True,
         ...     "socket_timeout": 3.0,
         ... }
         True
@@ -64,12 +67,12 @@ class Redis(DependencyProvider):
             sentinels.append((host, int(port)))
         res = dict(scheme=parsed.scheme, sentinels=sentinels)
         if parsed.password is not None:
-            res['password'] = res.password
+            res['password'] = parsed.password
         if parsed.path[1:]:
             res['db'] = int(parsed.path[1:])
         float_keys = ("socket_timeout", "socket_connect_timeout")
         int_keys = ("socket_read_size", "min_other_sentinels")
-        bool_keys = ("master", "socket_keepalive", "retry_on_timeout",
+        bool_keys = ("prefer_master", "socket_keepalive", "retry_on_timeout",
                      "decode_responses")
         for key, values in parse_qs(parsed.query).items():
             if key in float_keys:
