@@ -113,7 +113,7 @@ class Redis(DependencyProvider):
                 'port': int(url.port or 6379),
             })
             if url.scheme == SCHEME_REDISS:
-                res['connection_class'] = SSLConnection
+                res['init_kwargs']['connection_class'] = SSLConnection
 
         return res
 
