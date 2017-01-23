@@ -19,6 +19,7 @@ class MyService(object):
     name = "my_service"
 
     redis = Redis('development')
+    redis2 = Redis('dev_via_sentinel')
 
     @rpc
     def hello(self, name):
@@ -27,12 +28,13 @@ class MyService(object):
 
     @rpc
     def bye(self):
-        name = self.redis.get("foo")
+        name = self.redis2.get("foo")
         return "Bye, {}!".format(name)
 ```
 To specify redis connection string you will need a config
 ```yaml
-AMQP_URI: 'amqp://guest:guest@localhost'
+AMQP_URI: 'pyamqp://guest:guest@localhost'
 REDIS_URIS:
  development: 'redis://localhost:6379/0'
+ dev_via_sentinel: 'redis-sentinel://localhost:26379,localhost:26380/0?service_name=dev'
 ```
