@@ -4,9 +4,14 @@ from urlparse import urlparse
 from nameko.extensions import DependencyProvider
 
 from redis import StrictRedis as _StrictRedis
+from redis.connection import UnixDomainSocketConnection, SSLConnection
 from redis.sentinel import Sentinel
 
+
 REDIS_URIS_KEY = 'REDIS_URIS'
+SCHEME_SENTINEL = 'redis-sentinel'
+SCHEME_UNIX = 'unix'
+SCHEME_REDISS = 'rediss'
 
 
 class Redis(DependencyProvider):
@@ -20,24 +25,18 @@ class Redis(DependencyProvider):
 
     def start(self):
         conf = self.parse_uri(self.redis_uri)
-        conf.setdefault("decode_responses", True)
-        scheme = conf.pop("scheme")
-        if scheme == "redis-sentinel":
-            service_name = conf.pop("service_name", None)
-            if not service_name:
+        conf['init_kwargs'].setdefault("decode_responses", True)
+        if conf["scheme"] == SCHEME_SENTINEL:
+            if not conf.get("service_name"):
                 raise Exception("`service_name` is required for "
-                                "redis-sentinel scheme")
-            prefer_master = conf.pop("prefer_master", True)
-            sentinels = conf.pop("sentinels")
-            sentinel = Sentinel(sentinels, **conf)
-            if prefer_master:
-                self.client = sentinel.master_for(service_name)
+                                "{} scheme".format(SCHEME_SENTINEL))
+            sentinel = Sentinel(conf["address"], **conf["init_kwargs"])
+            if conf["prefer_master"]:
+                self.client = sentinel.master_for(conf["service_name"])
             else:
-                self.client = sentinel.slave_for(service_name)
+                self.client = sentinel.slave_for(conf["service_name"])
         else:
-            decode_responses = conf["decode_responses"]
-            self.client = _StrictRedis.from_url(
-                    self.redis_uri, decode_responses=decode_responses)
+            self.client = _StrictRedis(**conf["init_kwargs"])
 
     def parse_uri(self, uri):
         """
@@ -47,34 +46,42 @@ class Redis(DependencyProvider):
         ...                     'socket_timeout=3')
         >>> conf == {
         ...     "scheme": "redis-sentinel",
-        ...     "sentinels": [("host1", 26379), ("host2", 26379)],
-        ...     "db": 0,
-        ...     "password": "pass",
+        ...     "address": [("host1", 26379), ("host2", 26379)],
         ...     "service_name": "dev",
         ...     "prefer_master": True,
-        ...     "socket_timeout": 3.0,
+        ...     "init_kwargs": {
+        ...         "db": 0,
+        ...         "password": "pass",
+        ...         "socket_timeout": 3.0,
+        ...     }
         ... }
         True
         """
-        parsed = urlparse(uri)
-        sentinels = []
-        for netloc in parsed.netloc.split(","):
+        url = urlparse(uri)
+        res = {
+            'scheme': url.scheme,
+            'address': [],
+            'init_kwargs': {
+                'db': int(url.path[1:]),
+                'password': url.password,
+            },
+        }
+
+        for netloc in url.netloc.split(","):
             addr = netloc.rsplit("@", 1)[-1]
             if ':' in addr:
                 host, port = addr.split(':', 1)
-            else:
+            elif url.scheme == SCHEME_SENTINEL:
                 host, port = addr, 26379
-            sentinels.append((host, int(port)))
-        res = dict(scheme=parsed.scheme, sentinels=sentinels)
-        if parsed.password is not None:
-            res['password'] = parsed.password
-        if parsed.path[1:]:
-            res['db'] = int(parsed.path[1:])
+            else:
+                host, port = addr, 6379
+            res['address'].append((host, int(port)))
+
         float_keys = ("socket_timeout", "socket_connect_timeout")
-        int_keys = ("socket_read_size", "min_other_sentinels")
+        int_keys = ("db", "socket_read_size", "min_other_sentinels")
         bool_keys = ("prefer_master", "socket_keepalive", "retry_on_timeout",
                      "decode_responses")
-        for key, values in parse_qs(parsed.query).items():
+        for key, values in parse_qs(url.query).items():
             if key in float_keys:
                 value = float(values[0])
             elif key in int_keys:
@@ -88,7 +95,26 @@ class Redis(DependencyProvider):
                     value = bool(values[0])
             else:
                 value = values[0]
-            res[key] = value
+            res['init_kwargs'][key] = value
+
+        if url.scheme == SCHEME_SENTINEL:
+            res.update({
+                'service_name': res['init_kwargs'].pop('service_name', None),
+                'prefer_master': res['init_kwargs'].pop('prefer_master', True)
+            })
+        elif url.scheme == SCHEME_UNIX:
+            res['init_kwargs'].update({
+                'path': url.path,
+                'connection_class': UnixDomainSocketConnection,
+            })
+        else:
+            res['init_kwargs'].update({
+                'host': url.hostname,
+                'port': int(url.port or 6379),
+            })
+            if url.scheme == SCHEME_REDISS:
+                res['connection_class'] = SSLConnection
+
         return res
 
     def stop(self):
